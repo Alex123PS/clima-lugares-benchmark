@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>App Clima + Lugares + Benchmark</title>
+
+  <!-- Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Axios -->
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <!-- XLSX -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+  <style>
+    body { background: #f5f7fb; }
+    .card { border-radius: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    #benchOutput { white-space: pre-line; font-family: monospace; background: #111; color: #0f0; padding: 10px; border-radius: 10px; min-height: 120px; }
+    #benchChart { height: 250px; }
+  </style>
+</head>
+<body class="p-4">
+
+  <div class="container">
+    <h2 class="mb-4 text-center">🌤️ App Clima + Lugares + Benchmark</h2>
+
+    <div class="row g-4">
+      <!-- LUGARES -->
+      <div class="col-md-4">
+        <div class="card p-3">
+          <h5>Buscar Lugar (Nominatim)</h5>
+          <input id="placeInput" class="form-control mb-2" placeholder="Ejemplo: Puno, Perú" />
+          <button id="btnSearchPlace" class="btn btn-primary w-100">Buscar</button>
+          <div id="placeResults" class="mt-3"></div>
+        </div>
+      </div>
+
+      <!-- CLIMA -->
+      <div class="col-md-4">
+        <div class="card p-3">
+          <h5>Consultar Clima (Open-Meteo)</h5>
+          <input id="lat" class="form-control mb-2" placeholder="Latitud" />
+          <input id="lon" class="form-control mb-2" placeholder="Longitud" />
+          <button id="btnGetWeather" class="btn btn-success w-100">Consultar Clima</button>
+          <div id="weatherResult" class="mt-3"></div>
+        </div>
+      </div>
+
+      <!-- EXCEL -->
+      <div class="col-md-4">
+        <div class="card p-3">
+          <h5>Cargar Archivo Excel</h5>
+          <input type="file" id="fileInput" class="form-control mb-2" accept=".xlsx,.xls" />
+          <button id="btnParse" class="btn btn-warning w-100">Procesar</button>
+          <div class="table-responsive mt-2" style="max-height:200px;overflow:auto;">
+            <table class="table table-sm table-striped" id="dataTable"></table>
+          </div>
+        </div>  
+      </div>
+    </div>
+
+    <!-- BENCHMARK -->
+    <div class="card mt-5 p-4">
+      <h4>⚙️ Benchmark de Rendimiento</h4>
+      <div class="row g-3 align-items-center">
+        <div class="col-sm-4">
+          <label class="form-label">Simulaciones simultáneas:</label>
+          <input id="benchSimulations" type="number" class="form-control" value="5" min="1" max="50">
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label">Retardo entre llamadas (ms):</label>
+          <input id="benchDelay" type="number" class="form-control" value="100" min="0" step="50">
+        </div>
+      </div>
+
+      <div class="mt-3" id="benchOutput"></div>
+      <canvas id="benchChart" class="mt-3"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const el = id => document.getElementById(id);
+    const fmt = ms => (ms < 1000) ? ms.toFixed(2) + " ms" : (ms / 1000).toFixed(2) + " s";
+    const memUsage = () => {
+      if (performance.memory) {
+        const usedMB = performance.memory.usedJSHeapSize / 1048576;
+        const totalMB = performance.memory.jsHeapSizeLimit / 1048576;
+        return `${usedMB.toFixed(1)} MB / ${totalMB.toFixed(1)} MB`;
+      }
+      return "No soportado";
+    };
+
+    // === BENCHMARK ===
+    const benchChart = new Chart(el('benchChart'), {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Tiempo promedio (ms)',
+          data: [],
+          borderColor: 'lime',
+          borderWidth: 2,
+          fill: false,
+          tension: 0.1
+        }]
+      },
+      options: { scales: { y: { beginAtZero: true } } }
+    });
+
+    async function runBenchmark(tag, fn) {
+      const concurrent = parseInt(el('benchSimulations').value);
+      const delay = parseInt(el('benchDelay').value);
+
+      const results = [];
+      const startAll = performance.now();
+      const promises = [];
+
+      for (let i = 0; i < concurrent; i++) {
+        const p = (async () => {
+          const t0 = performance.now();
+          await fn();
+          const t1 = performance.now();
+          results.push(t1 - t0);
+        })();
+
+        promises.push(p);
+        await new Promise(r => setTimeout(r, delay)); // retardo configurable
+      }
+
+      await Promise.all(promises);
+      const endAll = performance.now();
+
+      const avg = results.reduce((a, b) => a + b, 0) / results.length;
+      const output = [
+        `--- BENCHMARK ${tag} ---`,
+        `Simulaciones: ${concurrent}`,
+        `Retardo: ${delay} ms`,
+        `Promedio: ${fmt(avg)}`,
+        `Total: ${fmt(endAll - startAll)}`,
+        `Memoria: ${memUsage()}`
+      ].join("\n");
+
+      console.log(output);
+      el('benchOutput').textContent = output;
+
+      benchChart.data.labels.push(tag);
+      benchChart.data.datasets[0].data.push(avg.toFixed(2));
+      benchChart.update();
+    }
+
+    // === LUGARES ===
+    el('btnSearchPlace').addEventListener('click', async () => {
+      const q = el('placeInput').value.trim();
+      if (!q) return alert("Ingrese un lugar");
+      el('placeResults').innerHTML = "Buscando...";
+      const searchFn = async () => {
+        const res = await axios.get('https://nominatim.openstreetmap.org/search', { params: { q, format: 'json', limit: 3 } });
+        return res.data;
+      };
+      const t0 = performance.now();
+      const data = await searchFn();
+      const t1 = performance.now();
+      el('placeResults').innerHTML = data.map(r => `
+        <div class="border rounded p-2 mb-1">
+          <div><b>${r.display_name}</b></div>
+          <div>lat: ${r.lat}, lon: ${r.lon}</div>
+          <button class="btn btn-sm btn-outline-primary mt-1 use-place" data-lat="${r.lat}" data-lon="${r.lon}">Usar</button>
+        </div>`).join('');
+      document.querySelectorAll('.use-place').forEach(btn => {
+        btn.onclick = e => {
+          el('lat').value = e.target.dataset.lat;
+          el('lon').value = e.target.dataset.lon;
+        };
+      });
+      await runBenchmark("Lugares", searchFn);
+    });
+
+    // === CLIMA ===
+    async function fetchWeather(lat, lon) {
+      const url = 'https://api.open-meteo.com/v1/forecast';
+      const res = await axios.get(url, { params: { latitude: lat, longitude: lon, current_weather: true } });
+      return res.data;
+    }
+
+    el('btnGetWeather').addEventListener('click', async () => {
+      const lat = el('lat').value, lon = el('lon').value;
+      if (!lat || !lon) return alert("Completa latitud y longitud");
+      el('weatherResult').innerHTML = "Cargando...";
+      const fetchFn = async () => await fetchWeather(lat, lon);
+      const t0 = performance.now();
+      const data = await fetchFn();
+      const t1 = performance.now();
+      el('weatherResult').innerHTML = `
+        <div><b>Temperatura:</b> ${data.current_weather.temperature} °C</div>
+        <div><b>Viento:</b> ${data.current_weather.windspeed} km/h</div>
+        <div class="text-muted small">Tiempo: ${fmt(t1 - t0)}</div>`;
+      await runBenchmark("Clima", fetchFn);
+    });
+
+    // === EXCEL ===
+    el('btnParse').addEventListener('click', async () => {
+      const file = el('fileInput').files[0];
+      if (!file) return alert("Seleccione un archivo");
+      const parseFn = async () => {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        return XLSX.utils.sheet_to_json(ws);
+      };
+      const t0 = performance.now();
+      const data = await parseFn();
+      const t1 = performance.now();
+      renderTable(data);
+      await runBenchmark("Excel", parseFn);
+    });
+
+    function renderTable(json) {
+      const table = el('dataTable');
+      if (!json.length) return table.innerHTML = "<tr><td>Vacío</td></tr>";
+      const cols = Object.keys(json[0]);
+      const head = "<tr>" + cols.map(c => `<th>${c}</th>`).join('') + "</tr>";
+      const rows = json.slice(0, 5).map(r => "<tr>" + cols.map(c => `<td>${r[c]}</td>`).join('') + "</tr>").join('');
+      table.innerHTML = "<thead>" + head + "</thead><tbody>" + rows + "</tbody>";
+    }
+  </script>
+</body>
+</html>
