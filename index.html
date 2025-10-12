@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>App Clima + Lugares + Benchmark</title>
+  <title>App Clima + Lugares + Benchmark + APIs Locales</title>
 
   <!-- Bootstrap -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
@@ -24,11 +24,11 @@
 <body class="p-4">
 
   <div class="container">
-    <h2 class="mb-4 text-center">🌤️ App Clima + Lugares + Benchmark</h2>
+    <h2 class="mb-4 text-center">🌤️ App Clima + Lugares + Benchmark + APIs Locales</h2>
 
     <div class="row g-4">
       <!-- LUGARES -->
-      <div class="col-md-4">
+      <div class="col-md-3">
         <div class="card p-3">
           <h5>Buscar Lugar (Nominatim)</h5>
           <input id="placeInput" class="form-control mb-2" placeholder="Ejemplo: Puno, Perú" />
@@ -38,7 +38,7 @@
       </div>
 
       <!-- CLIMA -->
-      <div class="col-md-4">
+      <div class="col-md-3">
         <div class="card p-3">
           <h5>Consultar Clima (Open-Meteo)</h5>
           <input id="lat" class="form-control mb-2" placeholder="Latitud" />
@@ -49,7 +49,7 @@
       </div>
 
       <!-- EXCEL -->
-      <div class="col-md-4">
+      <div class="col-md-3">
         <div class="card p-3">
           <h5>Cargar Archivo Excel</h5>
           <input type="file" id="fileInput" class="form-control mb-2" accept=".xlsx,.xls" />
@@ -58,6 +58,22 @@
             <table class="table table-sm table-striped" id="dataTable"></table>
           </div>
         </div>  
+      </div>
+
+      <!-- APIs LOCALES -->
+      <div class="col-md-3">
+        <div class="card p-3">
+          <h5>APIs Locales (Laravel)</h5>
+          <select id="apiSelect" class="form-select mb-2">
+            <option value="escrituras">/escrituras</option>
+            <option value="favorecidos">/favorecidos</option>
+            <option value="otorgantes">/otorgantes</option>
+          </select>
+          <button id="btnApiTest" class="btn btn-info w-100">Probar API</button>
+          <div class="table-responsive mt-2" style="max-height:200px;overflow:auto;">
+            <table class="table table-sm table-striped" id="apiTable"></table>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -83,6 +99,8 @@
   <script>
     const el = id => document.getElementById(id);
     const fmt = ms => (ms < 1000) ? ms.toFixed(2) + " ms" : (ms / 1000).toFixed(2) + " s";
+    const BASE_URL = "http://192.168.0.2:8000/api/";
+
     const memUsage = () => {
       if (performance.memory) {
         const usedMB = performance.memory.usedJSHeapSize / 1048576;
@@ -92,7 +110,6 @@
       return "No soportado";
     };
 
-    // === BENCHMARK ===
     const benchChart = new Chart(el('benchChart'), {
       type: 'line',
       data: {
@@ -126,7 +143,7 @@
         })();
 
         promises.push(p);
-        await new Promise(r => setTimeout(r, delay)); // retardo configurable
+        await new Promise(r => setTimeout(r, delay));
       }
 
       await Promise.all(promises);
@@ -150,6 +167,41 @@
       benchChart.update();
     }
 
+    // === API LOCAL ===
+    el('btnApiTest').addEventListener('click', async () => {
+      let endpoint = el('apiSelect').value;
+
+      // URLs completas exactas
+      let url;
+      if (endpoint === "favorecidos") {
+        url = "http://192.168.0.2:8000/api/favorecidos?per_page=0";
+      } else if (endpoint === "otorgantes") {
+        url = "http://192.168.0.2:8000/api/otorgantes?per_page=0";
+      } else {
+        url = BASE_URL + endpoint;
+      }
+
+      const apiFn = async () => {
+        const res = await axios.get(url);
+        return res.data.data || res.data; // Manejo Laravel con o sin paginación
+      };
+
+      const data = await apiFn();
+      renderApiTable(data);
+      await runBenchmark("API " + endpoint, apiFn);
+    });
+
+    function renderApiTable(data) {
+      const table = el('apiTable');
+      if (!Array.isArray(data) || data.length === 0)
+        return table.innerHTML = "<tr><td>Sin datos</td></tr>";
+
+      const cols = Object.keys(data[0]);
+      const head = "<tr>" + cols.map(c => `<th>${c}</th>`).join('') + "</tr>";
+      const rows = data.slice(0, 5).map(r => "<tr>" + cols.map(c => `<td>${r[c]}</td>`).join('') + "</tr>").join('');
+      table.innerHTML = "<thead>" + head + "</thead><tbody>" + rows + "</tbody>";
+    }
+
     // === LUGARES ===
     el('btnSearchPlace').addEventListener('click', async () => {
       const q = el('placeInput').value.trim();
@@ -159,9 +211,7 @@
         const res = await axios.get('https://nominatim.openstreetmap.org/search', { params: { q, format: 'json', limit: 3 } });
         return res.data;
       };
-      const t0 = performance.now();
       const data = await searchFn();
-      const t1 = performance.now();
       el('placeResults').innerHTML = data.map(r => `
         <div class="border rounded p-2 mb-1">
           <div><b>${r.display_name}</b></div>
@@ -178,24 +228,20 @@
     });
 
     // === CLIMA ===
-    async function fetchWeather(lat, lon) {
-      const url = 'https://api.open-meteo.com/v1/forecast';
-      const res = await axios.get(url, { params: { latitude: lat, longitude: lon, current_weather: true } });
-      return res.data;
-    }
-
     el('btnGetWeather').addEventListener('click', async () => {
       const lat = el('lat').value, lon = el('lon').value;
       if (!lat || !lon) return alert("Completa latitud y longitud");
       el('weatherResult').innerHTML = "Cargando...";
-      const fetchFn = async () => await fetchWeather(lat, lon);
-      const t0 = performance.now();
+      const fetchFn = async () => {
+        const res = await axios.get('https://api.open-meteo.com/v1/forecast', {
+          params: { latitude: lat, longitude: lon, current_weather: true }
+        });
+        return res.data;
+      };
       const data = await fetchFn();
-      const t1 = performance.now();
       el('weatherResult').innerHTML = `
         <div><b>Temperatura:</b> ${data.current_weather.temperature} °C</div>
-        <div><b>Viento:</b> ${data.current_weather.windspeed} km/h</div>
-        <div class="text-muted small">Tiempo: ${fmt(t1 - t0)}</div>`;
+        <div><b>Viento:</b> ${data.current_weather.windspeed} km/h</div>`;
       await runBenchmark("Clima", fetchFn);
     });
 
@@ -209,9 +255,7 @@
         const ws = wb.Sheets[wb.SheetNames[0]];
         return XLSX.utils.sheet_to_json(ws);
       };
-      const t0 = performance.now();
       const data = await parseFn();
-      const t1 = performance.now();
       renderTable(data);
       await runBenchmark("Excel", parseFn);
     });
